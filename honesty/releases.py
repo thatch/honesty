@@ -96,6 +96,7 @@ class FileEntry:
     file_type: FileType
     version: str  # TODO: better type
     requires_python: Optional[str] = None  # '>=3.6'
+    size: Optional[str] = None
     python_version: Optional[str] = None  # 'py2.py3' or 'source'
     upload_time: Optional[datetime] = None
     # TODO extract upload date?
@@ -136,6 +137,7 @@ class FileEntry:
             file_type=guess_file_type(obj["filename"]),
             version=version,
             requires_python=obj["requires_python"],
+            size=obj["size"],
             upload_time=parse_time(obj["upload_time_iso_8601"]),
         )
 
@@ -158,13 +160,12 @@ def parse_time(t: str) -> datetime:
 class PackageRelease:
     version: str
     files: List[FileEntry]
-
+    requires: Optional[List[str]] = None
 
 @dataclass
 class Package:
     name: str
     releases: Dict[str, PackageRelease]
-
 
 def remove_suffix(basename: str) -> str:
     suffixes = [
@@ -251,6 +252,9 @@ async def async_parse_index(
         url = urllib.parse.urljoin(cache.json_index_url, f"../pypi/{pkg}/json")
         with open(await cache.async_fetch(pkg, url=url)) as f:
             obj = json.loads(f.read())
+
+        if obj.get('requires_dist') is not None:
+            package.requires = obj['requires_dist']
 
         for k, release in obj["releases"].items():
             package.releases[k] = PackageRelease(version=k, files=[])
