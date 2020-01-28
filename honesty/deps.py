@@ -195,6 +195,11 @@ def _find_compatible_version(
     for (operator, ver) in constraints:
         v = pkg_resources.parse_version(ver)
         # print(possible, operator, repr(v))
+        if not v.is_prerelease:
+            to_remove = [k for k in possible if possible[k].is_prerelease]
+            for t in to_remove:
+                del possible[t]
+
         if operator == "==":
             to_remove = [k for k in possible if not possible[k] == v]
             for t in to_remove:
@@ -209,6 +214,10 @@ def _find_compatible_version(
                 del possible[t]
         elif operator == "<":
             to_remove = [k for k in possible if not possible[k] < v]
+            for t in to_remove:
+                del possible[t]
+        elif operator == ">":
+            to_remove = [k for k in possible if not possible[k] > v]
             for t in to_remove:
                 del possible[t]
         elif operator == "!=":
