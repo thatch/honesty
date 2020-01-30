@@ -6,7 +6,7 @@ import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .cache import Cache
 
@@ -22,7 +22,7 @@ NUMERIC_VERSION = re.compile(
 ISO8601_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 
-SDIST_EXTENSIONS = (".tar.gz", ".zip", ".tar.bz2")
+SDIST_EXTENSIONS = (".tgz", ".tar.gz", ".zip", ".tar.bz2")
 
 
 # This list matches warehouse/packaging/models.py with the addition of UNKNOWN.
@@ -45,7 +45,7 @@ SDIST_EXTENSIONS = (".tar.gz", ".zip", ".tar.bz2")
 
 class FileType(enum.IntEnum):
     UNKNOWN = 0
-    SDIST = 1  # .tar.gz or .zip (or for packages like Twisted, .tar.bz2)
+    SDIST = 1  # .tar.gz or .zip (or for packages like Twisted, .tar.bz2, or amqplib, .tgz)
     BDIST_DMG = 2  # .dmg
     BDIST_DUMB = 3  # -(platform).tar.gz
     BDIST_EGG = 4  # .egg
@@ -96,7 +96,7 @@ class FileEntry:
     file_type: FileType
     version: str  # TODO: better type
     requires_python: Optional[str] = None  # '>=3.6'
-    size: Optional[str] = None
+    size: Optional[int] = None
     python_version: Optional[str] = None  # 'py2.py3' or 'source'
     upload_time: Optional[datetime] = None
     # TODO extract upload date?
@@ -162,10 +162,13 @@ class PackageRelease:
     files: List[FileEntry]
     requires: Optional[List[str]] = None
 
+
 @dataclass
 class Package:
     name: str
     releases: Dict[str, PackageRelease]
+    requires: Optional[Sequence[str]] = None
+
 
 def remove_suffix(basename: str) -> str:
     suffixes = [
@@ -253,9 +256,10 @@ async def async_parse_index(
         with open(await cache.async_fetch(pkg, url=url)) as f:
             obj = json.loads(f.read())
 
-        if obj.get('requires_dist') is not None:
-            package.requires = obj['requires_dist']
+        if obj.get("requires_dist") is not None:
+            package.requires = obj["requires_dist"]
 
+        # TODO sort
         for k, release in obj["releases"].items():
             package.releases[k] = PackageRelease(version=k, files=[])
             for release_file in release:

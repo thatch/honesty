@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timezone
 from enum import Enum, IntEnum
 from pathlib import Path
-from typing import Any, List, Optional, Set
+from typing import Any, List, Optional, Set, Tuple
 
 import click
 import pkg_resources
@@ -17,8 +17,8 @@ from honesty.__version__ import __version__
 from honesty.api import async_download_many
 from honesty.archive import extract_and_get_names
 from honesty.cache import Cache
-from honesty.deps import DepWalker, DepNode, DepEdge
 from honesty.checker import guess_license, has_nativemodules, is_pep517, run_checker
+from honesty.deps import DepEdge, DepNode, DepWalker
 from honesty.releases import FileType, Package, async_parse_index, parse_index
 
 
@@ -289,44 +289,53 @@ async def age(verbose: bool, fresh: bool, base: str, package_name: str,) -> None
             days = diff.days + (diff.seconds / 86400.0)
             print(f"{v}\t{t.strftime('%Y-%m-%d')}\t{days:.2f}")
 
+
 @cli.command(help="Show dep tree")
 @click.option("--include-extras", is_flag=True, help="Whether to incude *any* extras")
 @click.option("--verbose", is_flag=True, help="Show verbose output")
+@click.option("--python-version", default="3.7.5")
 @click.argument("package_name")
-def deps(include_extras: bool, verbose: bool, package_name: str) -> None:
+def deps(
+    include_extras: bool, verbose: bool, python_version: str, package_name: str
+) -> None:
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
 
-    seen: Set[str] = set()
-    deptree = DepWalker(package_name).walk(include_extras)
+    # TODO platform option
+
+    seen: Set[Tuple[str, Optional[str], str]] = set()
+    assert python_version.count(".") == 2
+    deptree = DepWalker(package_name, python_version).walk(include_extras)
     # TODO record constraints on DepEdge, or put in lib to avoid this nonsense
     fake_root = DepNode("", version="", deps=[DepEdge(target=deptree)])
     print_deps(fake_root, seen)
 
-def print_deps(deps: DepNode, seen: Set[str], depth=0) -> None:
+
+def print_deps(
+    deps: DepNode, seen: Set[Tuple[str, Optional[str], str]], depth: int = 0
+) -> None:
     prefix = ". " * depth
     for x in deps.deps:
         # TODO display whether install or build dep, and whether pin disallows
         # current version, has compatible bdist, no sdist, etc
         key = (x.target.name, x.target.dep_extras, x.target.version)
-        dep_extras = f"[{x.target.dep_extras}]" if x.target.dep_extras else ''
+        dep_extras = f"[{x.target.dep_extras}]" if x.target.dep_extras else ""
         if key in seen:
-            print(f"{prefix}{x.target.name}{dep_extras} (=={x.target.version}) (already listed){x.markers or ''}")
+            print(
+                f"{prefix}{x.target.name}{dep_extras} (=={x.target.version}) (already listed){x.markers or ''}"
+            )
         else:
             seen.add(key)
-            color = 'red' if not x.target.has_sdist else 'green'
+            color = "red" if not x.target.has_sdist else "green"
             click.echo(
-                prefix +
-                click.style(
-                    x.target.name,
-                    fg=color,
-                ) + f"{dep_extras} (=={x.target.version}){' ' + x.markers if x.markers else ''} via " +
-                click.style(
-                    x.constraints or '*',
-                    fg='yellow',
-                )
+                prefix
+                + click.style(x.target.name, fg=color,)
+                + f"{dep_extras} (=={x.target.version}){' ' + x.markers if x.markers else ''} via "
+                + click.style(x.constraints or "*", fg="yellow")
+                + click.style(" no whl" if not x.target.has_bdist else "", fg="blue")
             )
             if x.target.deps:
-                print_deps(x.target, seen, depth+1)
+                print_deps(x.target, seen, depth + 1)
+
 
 def select_versions(package: Package, operator: str, selector: str) -> List[str]:
     """
