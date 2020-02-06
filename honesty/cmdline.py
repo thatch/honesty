@@ -18,6 +18,7 @@ from honesty.archive import extract_and_get_names
 from honesty.cache import Cache
 from honesty.checker import guess_license, has_nativemodules, is_pep517, run_checker
 from honesty.releases import FileType, Package, async_parse_index, parse_index
+from honesty.vcs import CloneAnalyzer, extract2, matchmerge
 
 
 # TODO type
@@ -286,6 +287,71 @@ async def age(verbose: bool, fresh: bool, base: str, package_name: str,) -> None
             diff = base_date - t
             days = diff.days + (diff.seconds / 86400.0)
             print(f"{v}\t{t.strftime('%Y-%m-%d')}\t{days:.2f}")
+
+
+@cli.command(help="Guess what git rev corresponds to a release")
+@click.argument("package_names", nargs=-1)
+@wrap_async
+async def revs(package_names: List[str]) -> None:
+    async with Cache(fresh_index=True) as cache:
+        for package_name in package_names:
+            url = None
+            if "@" in package_name:
+                package_name, url = package_name.split("@")
+
+            package_name, operator, version = package_name.partition("==")
+            package = await async_parse_index(package_name, cache, use_json=True)
+
+            if not url:
+                # We can only do this if we know a vcs url.
+                url = extract2(package)
+                if not url:
+                    click.echo(f"Sorry, {package.name} does not have a known vcs")
+                    continue
+
+            ca = CloneAnalyzer(url)
+
+            selected_versions = select_versions(package, operator, version)
+            for sv in selected_versions:
+                # TODO support '*' and such better
+                rel = package.releases[sv]
+                sdists = [f for f in rel.files if f.file_type == FileType.SDIST]
+                if not sdists:
+                    raise click.ClickException(f"{package.name}=={sv} no sdists")
+
+                lp = await cache.async_fetch(pkg=package_name, url=sdists[0].url)
+
+                # TODO: More than just setup.py...
+                archive_root, names = extract_and_get_names(
+                    lp, strip_top_level=True, patterns=("*.py",)
+                )
+
+                # This makes an assumption the repo and tree are set up the same (no
+                # subdir)
+                click.echo(f"{package.name}=={sv} sdist is...")
+
+                matches = {}
+                for n in names:
+                    contents = (Path(archive_root) / n[0]).read_text()
+                    rv = ca.best_match_contents(n[1], contents)
+                    if any(v for v in rv.values()):
+                        matches = matchmerge(rv, matches)
+                    else:
+                        print(
+                            f"ignored {n[1]}, this contents not in vcs", file=sys.stderr
+                        )
+
+                printed = False
+                for k, v in matches.items():
+                    if v:
+                        printed = True
+                        tags = ca._tag_in_branch(k, v)
+                        if tags:
+                            print(f"  on {k}: {tags}")
+                        else:
+                            print(f"  on {k}: one of commits {v}")
+                if not printed:
+                    print("  (unknown)")
 
 
 def select_versions(package: Package, operator: str, selector: str) -> List[str]:

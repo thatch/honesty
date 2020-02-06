@@ -6,7 +6,7 @@ import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .cache import Cache
 
@@ -164,6 +164,9 @@ class PackageRelease:
 class Package:
     name: str
     releases: Dict[str, PackageRelease]
+    requires: Optional[Sequence[str]] = None
+    home_page: Optional[str] = None
+    project_urls: Optional[Dict[str, str]] = None
 
 
 def remove_suffix(basename: str) -> str:
@@ -262,5 +265,7 @@ async def async_parse_index(
                 except UnexpectedFilename:
                     if strict:
                         raise
+        package.home_page = obj["info"]["home_page"]
+        package.project_urls = obj["info"]["project_urls"]
 
     return package
