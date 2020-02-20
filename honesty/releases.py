@@ -45,7 +45,9 @@ SDIST_EXTENSIONS = (".tgz", ".tar.gz", ".zip", ".tar.bz2")
 
 class FileType(enum.IntEnum):
     UNKNOWN = 0
-    SDIST = 1  # .tar.gz or .zip (or for packages like Twisted, .tar.bz2, or amqplib, .tgz)
+    SDIST = (
+        1  # .tar.gz or .zip (or for packages like Twisted, .tar.bz2, or amqplib, .tgz)
+    )
     BDIST_DMG = 2  # .dmg
     BDIST_DUMB = 3  # -(platform).tar.gz
     BDIST_EGG = 4  # .egg

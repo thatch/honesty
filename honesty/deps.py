@@ -4,15 +4,15 @@ import os
 import re
 import tarfile
 import zipfile
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from io import StringIO
 from typing import Dict, List, Optional, Sequence, Tuple
 from urllib.request import Request, urlopen
 from zipfile import ZipFile
 
+from packaging.markers import Marker
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
-from packaging.markers import Marker
 from pkginfo.distribution import parse as distribution_parse
 from pkginfo.sdist import SDist
 from pkginfo.wheel import Wheel
@@ -256,8 +256,11 @@ def read_metadata_sdist(path: "os.PathLike[str]") -> List[str]:
     ext = str(path).split(".")[-1]
     if ext == "zip":
         archive = zipfile.ZipFile(path)
-        names = [name for name in archive.namelist() if
-        name.endswith("/requires.txt") and name.count("/") <= 2]
+        names = [
+            name
+            for name in archive.namelist()
+            if name.endswith("/requires.txt") and name.count("/") <= 2
+        ]
         if not names:
             # print(path, "no requires.txt")
             return []
@@ -265,8 +268,11 @@ def read_metadata_sdist(path: "os.PathLike[str]") -> List[str]:
         data = archive.read(names[0])
     elif ext in ("gz", "bz2", "tgz"):
         archive2 = tarfile.TarFile.open(path)
-        names = [name for name in archive2.getnames() if
-        name.endswith("/requires.txt") and name.count("/") <= 2]
+        names = [
+            name
+            for name in archive2.getnames()
+            if name.endswith("/requires.txt") and name.count("/") <= 2
+        ]
         if not names:
             # print(path, "no requires.txt")
             return []
@@ -447,7 +453,9 @@ class Extras:
     This is a tiny class that lets us get 'extra == "foo"' working for
     `packaging.markers`
     """
+
     def __init__(self, extras):
         self.extras = extras
+
     def __eq__(self, other):
         return other in self.extras
