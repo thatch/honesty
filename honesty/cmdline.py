@@ -281,6 +281,8 @@ async def age(verbose: bool, fresh: bool, base: str, package_name: str,) -> None
         package = await async_parse_index(package_name, cache, use_json=True)
         selected_versions = select_versions(package, operator, version)
         for v in selected_versions:
+            if not package.releases[v].files:
+                continue
             t = min(x.upload_time for x in package.releases[v].files)
             assert t is not None
 
@@ -290,17 +292,23 @@ async def age(verbose: bool, fresh: bool, base: str, package_name: str,) -> None
 
 
 @cli.command(help="Guess what git rev corresponds to a release")
+@click.option("--url-only", is_flag=True)
+@click.option("--fresh", is_flag=True)
 @click.argument("package_names", nargs=-1)
 @wrap_async
-async def revs(package_names: List[str]) -> None:
-    async with Cache(fresh_index=True) as cache:
+async def revs(url_only: bool, fresh: bool, package_names: List[str]) -> None:
+    async with Cache(fresh_index=fresh) as cache:
         for package_name in package_names:
             url = None
             if "@" in package_name:
                 package_name, url = package_name.split("@")
 
             package_name, operator, version = package_name.partition("==")
-            package = await async_parse_index(package_name, cache, use_json=True)
+            try:
+                package = await async_parse_index(package_name, cache, use_json=True)
+            except Exception as e:
+                print(f"{package_name}: error {e}")
+                continue
 
             if not url:
                 # We can only do this if we know a vcs url.
@@ -309,49 +317,39 @@ async def revs(package_names: List[str]) -> None:
                     click.echo(f"Sorry, {package.name} does not have a known vcs")
                     continue
 
+            if url_only:
+                print(f"{package.name}: {url}")
+                continue
+
             ca = CloneAnalyzer(url)
 
             selected_versions = select_versions(package, operator, version)
             for sv in selected_versions:
-                # TODO support '*' and such better
+                # TODO support verssion '*' and such better
                 rel = package.releases[sv]
                 sdists = [f for f in rel.files if f.file_type == FileType.SDIST]
                 if not sdists:
-                    raise click.ClickException(f"{package.name}=={sv} no sdists")
+                    # These are generally ordered by python version, so this
+                    # makes us prefer a more current release, no 3to2
+                    sdists = rel.files[::-1]
+                    click.echo(
+                        f"Warning: {package.name}=={sv} does not have an sdist, "
+                        f"choosing another file arbitrarily: {sdists[0].basename}."
+                    )
 
                 lp = await cache.async_fetch(pkg=package_name, url=sdists[0].url)
 
-                # TODO: More than just setup.py...
+                # TODO: More than just *.py...
                 archive_root, names = extract_and_get_names(
                     lp, strip_top_level=True, patterns=("*.py",)
                 )
 
                 # This makes an assumption the repo and tree are set up the same (no
                 # subdir)
-                click.echo(f"{package.name}=={sv} sdist is...")
+                click.echo(f"{package.name}=={sv} sdist:")
 
-                matches = {}
-                for n in names:
-                    contents = (Path(archive_root) / n[0]).read_text()
-                    rv = ca.best_match_contents(n[1], contents)
-                    if any(v for v in rv.values()):
-                        matches = matchmerge(rv, matches)
-                    else:
-                        print(
-                            f"ignored {n[1]}, this contents not in vcs", file=sys.stderr
-                        )
-
-                printed = False
-                for k, v in matches.items():
-                    if v:
-                        printed = True
-                        tags = ca._tag_in_branch(k, v)
-                        if tags:
-                            print(f"  on {k}: {tags}")
-                        else:
-                            print(f"  on {k}: one of commits {v}")
-                if not printed:
-                    print("  (unknown)")
+                match = ca.find_best_match(archive_root, names, sv)
+                print("  ", match)
 
 
 def select_versions(package: Package, operator: str, selector: str) -> List[str]:
