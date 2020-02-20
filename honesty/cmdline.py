@@ -290,25 +290,59 @@ async def age(verbose: bool, fresh: bool, base: str, package_name: str,) -> None
             print(f"{v}\t{t.strftime('%Y-%m-%d')}\t{days:.2f}")
 
 
-@cli.command(help="Show dep tree")
+@cli.command(help="""
+Show a package's dep tree.
+
+The default output is a tree with red meaning there is no sdist.  If you want a
+flat output with a sample depth-first install order, use `--flat`.
+
+Does not currently understand pep 517 requirements, setup_requires, and
+trusts the first wheel it finds to contain deps applicable to your version and
+platform (which is wrong for many packages).
+
+This is not a solver and doesn't pretend to be.  A package can be listed
+multiple times (with different versions).
+""")
 @click.option("--include-extras", is_flag=True, help="Whether to incude *any* extras")
 @click.option("--verbose", is_flag=True, help="Show verbose output")
+@click.option("--flat", is_flag=True, help="Show (an) install order rather than tree")
 @click.option("--python-version", default="3.7.5")
 @click.argument("package_name")
 def deps(
-    include_extras: bool, verbose: bool, python_version: str, package_name: str
+    include_extras: bool, verbose: bool, flat: bool, python_version: str, package_name: str
 ) -> None:
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
 
     # TODO platform option
+    # TODO something that understands pep 517 requirements for building
+    # TODO move this out of cmdline into deps.py
+    # TODO a way to specify that you already have certain versions of packages,
+    # to prefer them.
 
     seen: Set[Tuple[str, Optional[str], str]] = set()
     assert python_version.count(".") == 2
     deptree = DepWalker(package_name, python_version).walk(include_extras)
     # TODO record constraints on DepEdge, or put in lib to avoid this nonsense
     fake_root = DepNode("", version="", deps=[DepEdge(target=deptree)])
-    print_deps(fake_root, seen)
+    if flat:
+        print_flat_deps(fake_root, seen)
+    else:
+        print_deps(fake_root, seen)
 
+def print_flat_deps(
+    deps: DepNode, seen: Set[Tuple[str, Optional[str], str]]
+) -> None:
+    # Simple postorder, assumes no cycles.
+    for x in deps.deps:
+        if x.target.deps:
+            print_flat_deps(x.target, seen)
+
+        key = (x.target.name, x.target.dep_extras, x.target.version)
+        dep_extras = f"[{x.target.dep_extras}]" if x.target.dep_extras else ""
+        if key not in seen:
+            seen.add(key)
+            # TODO markers
+            click.echo(f"{x.target.name}=={x.target.version}")
 
 def print_deps(
     deps: DepNode, seen: Set[Tuple[str, Optional[str], str]], depth: int = 0
