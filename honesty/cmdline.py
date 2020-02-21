@@ -293,10 +293,13 @@ async def age(verbose: bool, fresh: bool, base: str, package_name: str,) -> None
 
 @cli.command(help="Guess what git rev corresponds to a release")
 @click.option("--url-only", is_flag=True)
+@click.option("--try_order", default="likely_tags,tags,branches")
 @click.option("--fresh", is_flag=True)
 @click.argument("package_names", nargs=-1)
 @wrap_async
-async def revs(url_only: bool, fresh: bool, package_names: List[str]) -> None:
+async def revs(
+    url_only: bool, fresh: bool, try_order: str, package_names: List[str]
+) -> None:
     async with Cache(fresh_index=fresh) as cache:
         for package_name in package_names:
             url = None
@@ -332,10 +335,10 @@ async def revs(url_only: bool, fresh: bool, package_names: List[str]) -> None:
                     # These are generally ordered by python version, so this
                     # makes us prefer a more current release, no 3to2
                     sdists = rel.files[::-1]
-                    click.echo(
-                        f"Warning: {package.name}=={sv} does not have an sdist, "
-                        f"choosing another file arbitrarily: {sdists[0].basename}."
-                    )
+                    # click.echo(
+                    #     f"Warning: {package.name}=={sv} does not have an sdist, "
+                    #     f"choosing another file arbitrarily: {sdists[0].basename}."
+                    # )
 
                 lp = await cache.async_fetch(pkg=package_name, url=sdists[0].url)
 
@@ -348,7 +351,9 @@ async def revs(url_only: bool, fresh: bool, package_names: List[str]) -> None:
                 # subdir)
                 click.echo(f"{package.name}=={sv} sdist:")
 
-                match = ca.find_best_match(archive_root, names, sv)
+                match = ca.find_best_match(
+                    archive_root, names, sv, try_order=try_order.split(",")
+                )
                 print("  ", match)
 
 
