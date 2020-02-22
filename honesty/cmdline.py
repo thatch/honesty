@@ -294,7 +294,7 @@ async def age(verbose: bool, fresh: bool, base: str, package_name: str,) -> None
 @cli.command(help="Guess what git rev corresponds to a release")
 @click.option("--url-only", is_flag=True)
 @click.option("--try_order", default="likely_tags,tags,branches")
-@click.option("--fresh", is_flag=True)
+@click.option("--fresh", "-f", is_flag=True)
 @click.argument("package_names", nargs=-1)
 @wrap_async
 async def revs(
@@ -331,30 +331,35 @@ async def revs(
                 # TODO support verssion '*' and such better
                 rel = package.releases[sv]
                 sdists = [f for f in rel.files if f.file_type == FileType.SDIST]
+                type_suffix = "sdist"
                 if not sdists:
                     # These are generally ordered by python version, so this
                     # makes us prefer a more current release, no 3to2
-                    sdists = rel.files[::-1]
-                    # click.echo(
-                    #     f"Warning: {package.name}=={sv} does not have an sdist, "
-                    #     f"choosing another file arbitrarily: {sdists[0].basename}."
-                    # )
+                    sdists = [
+                        f for f in rel.files if f.file_type == FileType.BDIST_WHEEL
+                    ]
+                    type_suffix = "wheel"
 
                 lp = await cache.async_fetch(pkg=package_name, url=sdists[0].url)
 
                 # TODO: More than just *.py...
                 archive_root, names = extract_and_get_names(
-                    lp, strip_top_level=True, patterns=("*.py",)
+                    lp, strip_top_level=True, patterns=("*.*",)
                 )
 
                 # This makes an assumption the repo and tree are set up the same (no
                 # subdir)
-                click.echo(f"{package.name}=={sv} sdist:")
+                click.echo(f"{package.name}=={sv} {type_suffix}:")
 
                 match = ca.find_best_match(
                     archive_root, names, sv, try_order=try_order.split(",")
                 )
-                print("  ", match)
+                # TODO attempt a describe on revs, and don't sort alphabetically
+                simplified = sorted(set(m[2] for m in match))
+                if simplified:
+                    print(f"  p={match[0][0]} {simplified}")
+                else:
+                    print("  no match")
 
 
 def select_versions(package: Package, operator: str, selector: str) -> List[str]:

@@ -2,10 +2,19 @@
 If it works right, tells you what git tag corresponds to a given release by
 examinining contents.
 
-Precaching the information about every file for every commit is very
-memory-intensive, and for some large repos like tensorflow, consumes many
-GB, slowly.  I intend to refactor this and document better in the future, but
-this works for many smaller repos now.
+On git, this is pretty efficient:
+
+1. Exclude files which never existed in the repo.
+2. For verifying tags, it's just set operations against all hashes in the
+tag's commit.
+3. For branches, imagine pointers at the first and last commit for that branch's
+history, that ratchet inward based on revs each hash existed.
+
+I haven't implemented Mercurial support yet, because the hashes are not just
+contents but also history position.  This trick doesn't work then, and will need
+to have a heuristic for possible filenames to hash ourselves.  See
+https://www.mercurial-scm.org/wiki/Manifest and
+https://www.mercurial-scm.org/wiki/Nodeid
 """
 import functools
 import os
@@ -79,12 +88,14 @@ class CloneAnalyzer:
         return [
             line.split()
             for line in subprocess.check_output(
-                ["git", "log", "--format=%h %T", ref], cwd=self.dir, encoding="utf-8"
+                ["git", "log", "--no-renames", "--format=%h %T", ref],
+                cwd=self.dir,
+                encoding="utf-8",
             ).splitlines()
             if line.strip()
         ]
 
-    @functools.lru_cache(maxsize=None)
+    @functools.lru_cache(maxsize=4096)
     def _ls_tree(self, tree):
         return subprocess.check_output(
             ["git", "ls-tree", "-r", tree], encoding="utf-8", cwd=self.dir
@@ -126,15 +137,15 @@ class CloneAnalyzer:
         if filename is None and ref in self._log_cache:
             return self._log_cache[ref]
 
-        args = ["git", "log", "--oneline", "--decorate", ref]
+        args = ["git", "log", "--no-renames", "--oneline", "--decorate", ref]
         if filename:
             args.extend(["--", filename])
 
         data = subprocess.check_output(args, cwd=self.dir, encoding="utf-8")
         # print(data)
         rv = ONELINE_RE.findall(data)
-        if filename is None:
-            self._log_cache[ref] = rv
+        # if filename is None:
+        #    self._log_cache[ref] = rv
         return rv
 
     def _branch_names(self):
@@ -162,6 +173,7 @@ class CloneAnalyzer:
             ["git", "show", f"{rev}:{filename}"], cwd=self.dir, encoding="utf-8"
         )
 
+    @functools.lru_cache(maxsize=None)
     def _exists(self, hash):
         try:
             subprocess.check_call(["git", "cat-file", "-e", hash], cwd=self.dir)
@@ -172,20 +184,9 @@ class CloneAnalyzer:
     def _try_tags(self, known, likely_tags):
         scores = []
         for tag in likely_tags:
-            matching_hashes = set()
-            for line in self._ls_tree(tag):
-                parts = line.split(" ", 2)
-                if parts[1] == "blob":
-                    blob_hash, filename = parts[2].split("\t", 1)
-                    if blob_hash in known:
-                        matching_hashes.add(blob_hash)
-
-            leftover = [k for k in known if k not in matching_hashes]
-            # if not leftover:
-            #    # TODO multiple identical tags should all be reported.
-            #    return (1.0, f"tags/{tag}")
+            leftover = self._calc_leftover(tag, known)
             # print(f"{tag} is close, missing {', '.join(known[x] for x in leftover)}")
-            scores.append((1 - (len(leftover) / float(len(known))), f"tags/{tag}"))
+            scores.append((1 - (len(leftover) / float(len(known))), 0, f"tags/{tag}"))
         return scores
 
     def _try_branches(self, known) -> List[Tuple[float, str]]:
@@ -194,16 +195,20 @@ class CloneAnalyzer:
         checked = set()
         scores = []
 
+        checked_results = set()
+
         for branch in self._branch_names():
             # TODO: Index
             branch_revs = subprocess.check_output(
-                ["git", "log", "--pretty=%h", branch], cwd=self.dir, encoding="utf-8"
+                ["git", "log", "--no-renames", "--pretty=%h", branch],
+                cwd=self.dir,
+                encoding="utf-8",
             ).split()
 
             a, b = 0, len(branch_revs)
             # print(branch)
             if branch_revs[0] in checked:
-                print("done")
+                # print("done")
                 continue
 
             checked.update(branch_revs)
@@ -212,7 +217,15 @@ class CloneAnalyzer:
             for h, fn in known.items():
                 # print(f"top {a} {b}")
                 changed_revs = subprocess.check_output(
-                    ["git", "log", "--pretty=%h", "--find-object", h, branch],
+                    [
+                        "git",
+                        "log",
+                        "--no-renames",
+                        "--pretty=%h",
+                        "--find-object",
+                        h,
+                        branch,
+                    ],
                     cwd=self.dir,
                     encoding="utf-8",
                 ).split()
@@ -226,7 +239,7 @@ class CloneAnalyzer:
                 if len(changed_revs) == 0:
                     # It's not on this branch (but exists somewhere else);
                     # this can probably become 'break' after testing.
-                    print("  bad")
+                    # print("  bad")
                     bad_branch = True
                     break
                 elif len(changed_revs) == 1 or h in self._ls_tree(changed_revs[0]):
@@ -234,8 +247,8 @@ class CloneAnalyzer:
                     bh = branch_revs.index(changed_revs[-1])
                     if bh < b:
                         b = bh
-                    print(f"  1: {a} {b} ({bh}) for {fn}")
-                    print(changed_revs)
+                    # print(f"  1: {a} {b} ({bh}) for {fn}")
+                    # print(changed_revs)
                 else:
                     # len(changed_revs) > 1, and it is deleted in changed_revs[0]
 
@@ -247,8 +260,8 @@ class CloneAnalyzer:
                     bh = branch_revs.index(changed_revs[-1])
                     if bh < b:
                         b = bh
-                    print(f"  2: {a} {b} ({ah} {bh}) for {fn}")
-                    print(changed_revs)
+                    # print(f"  2: {a} {b} ({ah} {bh}) for {fn}")
+                    # print(changed_revs)
 
                 if a >= b:
                     bad_branch = True
@@ -260,6 +273,12 @@ class CloneAnalyzer:
                 continue
 
             if b >= a:
+                # If we already saw this solution, don't report it again.
+                key = (branch_revs[a], branch_revs[b])
+                if key in checked_results:
+                    continue
+                checked_results.add(key)
+
                 for rev in branch_revs[a : b + 1]:
 
                     if rev in rev_on_branch:
@@ -267,34 +286,48 @@ class CloneAnalyzer:
                         continue
                     rev_on_branch[rev] = set(branch)
 
-                    matching_hashes = set()
-                    # TODO this could probably be optimized by looking at log
-                    # --stat; many fewer forks.
-                    for line in self._ls_tree(rev):
-                        parts = line.split(" ", 2)
-                        if parts[1] == "blob":
-                            blob_hash, filename = parts[2].split("\t", 1)
-                            if blob_hash in known:
-                                matching_hashes.add(blob_hash)
-                    leftover = [k for k in known if k not in matching_hashes]
-                    # if not leftover:
-                    #    # TODO multiple should be reported
-                    #    return (1.0, rev)
-                    # print(f"{rev} is close, missing {', '.join(known[x] for x in leftover) or None}")
-                    scores.append((1 - (len(leftover) / float(len(known))), rev))
+                    leftover = self._calc_leftover(rev, known)
+                    # if leftover:
+                    #    print(f"{rev} is close, missing {', '.join(known[x] for x in leftover) or None}")
+                    scores.append((1 - (len(leftover) / float(len(known))), 1, rev))
+
         return scores
+
+    def _calc_leftover(self, rev, known):
+        matching_hashes = set()
+        # TODO this could probably be optimized by looking at log
+        # --stat; many fewer forks.
+        for line in self._ls_tree(rev):
+            parts = line.split(" ", 2)
+            if parts[1] == "blob":
+                blob_hash, filename = parts[2].split("\t", 1)
+                if blob_hash in known:
+                    matching_hashes.add(blob_hash)
+        leftover = [k for k in known if k not in matching_hashes]
+        return leftover
 
     def find_best_match(
         self, archive_root: str, names: List[str], version: str, try_order: List[str]
     ) -> List[Tuple[float, str]]:
         known = {}
         for a, b in names:
+            if "egg-info" in a:
+                continue
             hash = self._hash_object_path(os.path.join(archive_root, a))
+            if hash in (
+                "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",  # empty
+                "8b137891791fe96927ad78e64b0aad7bded08bdc",  # single newline
+            ):
+                continue
             if self._exists(hash):
                 known[hash] = b
             else:
                 # print(f"{b} does not exist in this repo with {hash}")
                 pass
+
+        if not known:
+            # nothing passed in exists at all in this repo :/
+            return []
 
         scores = []
         for t in try_order:
@@ -316,15 +349,18 @@ class CloneAnalyzer:
         last = 0
         for i in range(len(scores)):
             if prev is None:
-                prev = scores[i][0]
+                prev = scores[i][:2]
                 last = 0
-            if scores[i][0] != prev:
+            if scores[i][:2] != prev:
                 break
             last = i
             if i > 100:
                 break
 
         return scores[: last + 1]
+
+    def describe(self, rev):
+        return subprocess.check_output(["git", "describe", "--tags", rev], cwd=self.dir)
 
 
 def matchmerge(a, b):
