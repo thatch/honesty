@@ -76,8 +76,11 @@ class CloneAnalyzer:
         self.key = "__".join(parts[-3:-1])
         self.dir = Path("~/.cache/honesty/git").expanduser() / self.key
         if not self.dir.exists():
+            env = os.environ.copy()
+            env["GIT_TERMINAL_PROMPT"] = "0"
             subprocess.check_call(
-                ["git", "clone", url, self.dir], env={"GIT_TERMINAL_PROMPT": "0"}
+                ["git", "clone", url, self.dir],
+                env=env,
             )
         else:
             subprocess.check_call(["git", "fetch", "origin", "--tags"], cwd=self.dir)
